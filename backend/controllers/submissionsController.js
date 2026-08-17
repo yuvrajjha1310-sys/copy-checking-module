@@ -116,6 +116,52 @@ exports.returnSubmission = async (req, res) => {
   }
 };
 
+// PATCH /api/submissions/:id  -> edit any field, any status
+exports.editSubmission = async (req, res) => {
+  try {
+    const existing = await prisma.submission.findUnique({ where: { id: Number(req.params.id) } });
+    if (!existing) return res.status(404).json({ error: 'Submission not found' });
+
+    const { studentName, studentRoll, subject, assignmentTitle, maxMarks, marksObtained, remarks } = req.body;
+
+    const data = {};
+    if (studentName !== undefined) data.studentName = studentName;
+    if (studentRoll !== undefined) data.studentRoll = studentRoll;
+    if (subject !== undefined) data.subject = subject;
+    if (assignmentTitle !== undefined) data.assignmentTitle = assignmentTitle;
+
+    const effectiveMax = maxMarks !== undefined ? Number(maxMarks) : existing.maxMarks;
+    if (maxMarks !== undefined) {
+      if (Number.isNaN(effectiveMax) || effectiveMax <= 0) {
+        return res.status(400).json({ error: 'maxMarks must be a positive number' });
+      }
+      data.maxMarks = effectiveMax;
+    }
+
+    if (marksObtained !== undefined && marksObtained !== null && marksObtained !== '') {
+      const marks = Number(marksObtained);
+      if (Number.isNaN(marks) || marks < 0) {
+        return res.status(400).json({ error: 'marksObtained must be a non-negative number' });
+      }
+      if (marks > effectiveMax) {
+        return res.status(400).json({ error: `marksObtained cannot exceed maxMarks (${effectiveMax})` });
+      }
+      data.marksObtained = marks;
+    }
+
+    if (remarks !== undefined) data.remarks = remarks;
+
+    const submission = await prisma.submission.update({
+      where: { id: Number(req.params.id) },
+      data,
+    });
+    res.json(submission);
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: 'Failed to update submission' });
+  }
+};
+
 // DELETE /api/submissions/:id
 exports.deleteSubmission = async (req, res) => {
   try {

@@ -6,6 +6,7 @@ const {
   createSubmission,
   assignChecker,
   checkSubmission,
+  editSubmission,
   returnSubmission,
   deleteSubmission,
 } = require('../controllers/submissionsController');
@@ -22,6 +23,7 @@ router.post('/', requireAuth, createSubmission);
 router.patch('/:id/assign', requireAuth, assignChecker);
 router.patch('/:id/check', requireAuth, checkSubmission);
 router.patch('/:id/return', requireAuth, returnSubmission);
+router.patch('/:id', requireAuth, editSubmission); // full edit, any status
 router.delete('/:id', requireAuth, deleteSubmission);
 
 module.exports = router;

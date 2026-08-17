@@ -52,6 +52,7 @@ export default function CopyChecking() {
   const [loadError, setLoadError] = useState("");
   const [showAddForm, setShowAddForm] = useState(false);
   const [checkTarget, setCheckTarget] = useState(null); // submission being marked
+  const [editTarget, setEditTarget] = useState(null); // submission being edited
 
   async function load() {
     setLoading(true);
@@ -125,6 +126,18 @@ export default function CopyChecking() {
     }
   }
 
+  async function handleEdit(id, form) {
+    const res = await fetch(`${API_BASE}/submissions/${id}`, {
+      method: "PATCH",
+      credentials: "include",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(form),
+    });
+    await unwrap(res); // throws with the server's message on failure
+    setEditTarget(null);
+    load();
+  }
+
   return (
     <div className="min-h-screen text-[var(--ink)]">
       <div className="max-w-5xl mx-auto px-6 py-10">
@@ -196,6 +209,12 @@ export default function CopyChecking() {
                         {s.marksObtained != null ? `${s.marksObtained}/${s.maxMarks}` : "—"}
                       </td>
                       <td className="px-4 py-3 text-right space-x-2">
+                        <button
+                          onClick={() => setEditTarget(s)}
+                          className="btn focus-ring text-xs font-medium text-[var(--muted)] hover:text-[var(--ink)] hover:underline rounded px-1"
+                        >
+                          Edit
+                        </button>
                         {s.status === "PENDING" && (
                           <button
                             onClick={() => handleAssign(s.id)}
@@ -235,6 +254,9 @@ export default function CopyChecking() {
       )}
       {checkTarget && (
         <CheckModal submission={checkTarget} onClose={() => setCheckTarget(null)} onSubmit={handleCheck} />
+      )}
+      {editTarget && (
+        <EditModal submission={editTarget} onClose={() => setEditTarget(null)} onSubmit={handleEdit} />
       )}
     </div>
   );
@@ -477,6 +499,78 @@ function CheckModal({ submission, onClose, onSubmit }) {
           <button type="submit" disabled={submitting} className="btn btn-primary focus-ring px-3 py-1.5 text-sm rounded-md bg-[var(--accent)] text-white hover:opacity-90 disabled:opacity-60 flex items-center gap-2">
             {submitting && <span className="spinner" />}
             {submitting ? "Saving…" : "Save marks"}
+          </button>
+        </div>
+      </form>
+    </ModalShell>
+  );
+}
+
+function EditModal({ submission, onClose, onSubmit }) {
+  const { closing, requestClose } = useClosable(onClose);
+  const [form, setForm] = useState({
+    studentName: submission.studentName ?? "",
+    studentRoll: submission.studentRoll ?? "",
+    subject: submission.subject ?? "",
+    assignmentTitle: submission.assignmentTitle ?? "",
+    maxMarks: submission.maxMarks ?? 100,
+    marksObtained: submission.marksObtained ?? "",
+    remarks: submission.remarks ?? "",
+  });
+  const [error, setError] = useState("");
+  const [submitting, setSubmitting] = useState(false);
+
+  async function handleSubmit(e) {
+    e.preventDefault();
+    setError("");
+
+    if (form.marksObtained !== "" && Number(form.marksObtained) > Number(form.maxMarks)) {
+      setError(`Marks can't exceed the maximum (${form.maxMarks}).`);
+      return;
+    }
+
+    setSubmitting(true);
+    try {
+      await onSubmit(submission.id, form);
+    } catch (err) {
+      setError(err.message);
+    } finally {
+      setSubmitting(false);
+    }
+  }
+
+  return (
+    <ModalShell title={`Edit — ${submission.studentName}`} onClose={requestClose} closing={closing}>
+      <form onSubmit={handleSubmit} className="space-y-3">
+        <Field label="Student name" value={form.studentName} onChange={(v) => setForm({ ...form, studentName: v })} required />
+        <Field label="Roll number" value={form.studentRoll} onChange={(v) => setForm({ ...form, studentRoll: v })} required />
+        <Field label="Subject" value={form.subject} onChange={(v) => setForm({ ...form, subject: v })} required />
+        <Field label="Assignment title" value={form.assignmentTitle} onChange={(v) => setForm({ ...form, assignmentTitle: v })} required />
+        <Field label="Max marks" type="number" value={form.maxMarks} onChange={(v) => setForm({ ...form, maxMarks: v })} required />
+        <Field label="Marks obtained" type="number" value={form.marksObtained} onChange={(v) => setForm({ ...form, marksObtained: v })} />
+        <div>
+          <label className="block text-xs font-medium text-[var(--muted)] mb-1">Remarks</label>
+          <textarea
+            value={form.remarks}
+            onChange={(e) => setForm({ ...form, remarks: e.target.value })}
+            rows={3}
+            className="input-field focus-ring w-full rounded-md border border-[var(--border)] bg-transparent text-[var(--ink)] px-3 py-2 text-sm focus:outline-none"
+          />
+        </div>
+
+        {error && (
+          <p className="animate-toast-in text-sm text-[var(--accent)] bg-[var(--accent)]/10 border border-[var(--accent)]/30 rounded-md px-3 py-2">
+            {error}
+          </p>
+        )}
+
+        <div className="flex justify-end gap-2 pt-2">
+          <button type="button" onClick={requestClose} className="btn focus-ring px-3 py-1.5 text-sm text-[var(--muted)] hover:text-[var(--ink)] rounded-md">
+            Cancel
+          </button>
+          <button type="submit" disabled={submitting} className="btn btn-primary focus-ring px-3 py-1.5 text-sm rounded-md bg-[var(--accent)] text-white hover:opacity-90 disabled:opacity-60 flex items-center gap-2">
+            {submitting && <span className="spinner" />}
+            {submitting ? "Saving…" : "Save changes"}
           </button>
         </div>
       </form>
