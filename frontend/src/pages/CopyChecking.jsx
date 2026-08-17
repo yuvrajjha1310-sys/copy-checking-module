@@ -487,7 +487,7 @@ function CheckModal({ submission, onClose, onSubmit }) {
 function ModalShell({ title, onClose, closing, children }) {
   return (
     <div className="fixed inset-0 flex items-center justify-center p-4 z-50">
-      <div className={`bg-[var(--surface)] border border-[var(--border)] rounded-lg shadow-xl w-full max-w-sm p-5 backdrop-blur-md ${closing ? "animate-modal-out" : "animate-modal-in"}`}>
+      <div className={`bg-white dark:bg-[#111111] border border-[var(--border)] rounded-lg shadow-xl w-full max-w-sm p-5 ${closing ? "animate-modal-out" : "animate-modal-in"}`}>
         <div className="flex items-center justify-between mb-4">
           <h2 className="font-display text-lg text-[var(--ink)]">{title}</h2>
           <button onClick={onClose} className="btn focus-ring text-[var(--muted)] hover:text-[var(--ink)] text-sm rounded px-1.5 py-0.5">✕</button>
