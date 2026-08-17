@@ -1,0 +1,56 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// ─────────────────────────────────────────────────────────────
+// COPY / ASSIGNMENT CHECKING MODULE
+// When merging into the team's shared schema.prisma, paste only
+// the enum + model below (not this datasource/generator block —
+// the shared project already has one).
+// ─────────────────────────────────────────────────────────────
+
+enum SubmissionStatus {
+  PENDING     // student has submitted, no checker assigned yet
+  IN_REVIEW   // a checker has picked it up
+  CHECKED     // marks + remarks entered
+  RETURNED    // handed back to the student
+}
+
+model User {
+  id           Int          @id @default(autoincrement())
+  name         String
+  email        String       @unique
+  passwordHash String
+  createdAt    DateTime     @default(now())
+
+  submissions  Submission[] @relation("CheckedBy")
+}
+
+model Submission {
+  id               Int              @id @default(autoincrement())
+  studentName      String
+  studentRoll      String
+  subject          String
+  assignmentTitle  String
+  submittedAt      DateTime         @default(now())
+  status           SubmissionStatus @default(PENDING)
+
+  checkerName      String?
+  checkerId        Int?
+  checker          User?            @relation("CheckedBy", fields: [checkerId], references: [id])
+  marksObtained    Int?
+  maxMarks         Int              @default(100)
+  remarks          String?
+  checkedAt        DateTime?
+
+  createdAt        DateTime         @default(now())
+  updatedAt        DateTime         @updatedAt
+
+  @@index([status])
+  @@index([subject])
+}
