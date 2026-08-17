@@ -53,6 +53,10 @@ export default function CopyChecking() {
   const [showAddForm, setShowAddForm] = useState(false);
   const [checkTarget, setCheckTarget] = useState(null); // submission being marked
   const [editTarget, setEditTarget] = useState(null); // submission being edited
+  const [importing, setImporting] = useState(false);
+  const [exporting, setExporting] = useState(false);
+  const [importMsg, setImportMsg] = useState("");
+  const fileInputRef = useRef(null);
 
   async function load() {
     setLoading(true);
@@ -138,6 +142,63 @@ export default function CopyChecking() {
     load();
   }
 
+  function handleImportClick() {
+    setImportMsg("");
+    fileInputRef.current?.click();
+  }
+
+  async function handleImportFile(e) {
+    const file = e.target.files?.[0];
+    e.target.value = ""; // allow re-picking the same file next time
+    if (!file) return;
+
+    setImporting(true);
+    setImportMsg("");
+    try {
+      const formData = new FormData();
+      formData.append("file", file);
+      const res = await fetch(`${API_BASE}/submissions/import`, {
+        method: "POST",
+        credentials: "include",
+        body: formData,
+      });
+      const data = await unwrap(res);
+      setImportMsg(
+        data.skippedCount > 0
+          ? `Imported ${data.created}, skipped ${data.skippedCount} row(s).`
+          : `Imported ${data.created} submission(s).`
+      );
+      load();
+    } catch (err) {
+      setImportMsg(err.message);
+    } finally {
+      setImporting(false);
+    }
+  }
+
+  async function handleExport() {
+    setExporting(true);
+    setLoadError("");
+    try {
+      const query = tab === "ALL" ? "" : `?status=${tab}`;
+      const res = await fetch(`${API_BASE}/submissions/export${query}`, { credentials: "include" });
+      if (!res.ok) throw new Error(`Export failed (${res.status})`);
+      const blob = await res.blob();
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = `submissions-${new Date().toISOString().slice(0, 10)}.csv`;
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      URL.revokeObjectURL(url);
+    } catch (err) {
+      setLoadError(err.message);
+    } finally {
+      setExporting(false);
+    }
+  }
+
   return (
     <div className="min-h-screen text-[var(--ink)]">
       <div className="max-w-5xl mx-auto px-6 py-10">
@@ -151,13 +212,44 @@ export default function CopyChecking() {
               Track submitted work from student desk to marked-and-returned.
             </p>
           </div>
-          <button
-            onClick={() => setShowAddForm(true)}
-            className="btn btn-primary focus-ring shrink-0 rounded-md bg-[var(--accent)] text-white text-sm font-medium px-4 py-2 hover:opacity-90"
-          >
-            + Log submission
-          </button>
+          <div className="flex items-center gap-2 shrink-0">
+            <input
+              ref={fileInputRef}
+              type="file"
+              accept=".csv,text/csv"
+              onChange={handleImportFile}
+              className="hidden"
+            />
+            <button
+              onClick={handleImportClick}
+              disabled={importing}
+              className="btn focus-ring rounded-md border border-[var(--border)] text-sm font-medium px-3 py-2 text-[var(--ink)] hover:bg-[var(--muted)]/10 disabled:opacity-60 flex items-center gap-2"
+            >
+              {importing && <span className="spinner" />}
+              {importing ? "Importing…" : "Import CSV"}
+            </button>
+            <button
+              onClick={handleExport}
+              disabled={exporting}
+              className="btn focus-ring rounded-md border border-[var(--border)] text-sm font-medium px-3 py-2 text-[var(--ink)] hover:bg-[var(--muted)]/10 disabled:opacity-60 flex items-center gap-2"
+            >
+              {exporting && <span className="spinner" />}
+              {exporting ? "Exporting…" : "Export CSV"}
+            </button>
+            <button
+              onClick={() => setShowAddForm(true)}
+              className="btn btn-primary focus-ring rounded-md bg-[var(--accent)] text-white text-sm font-medium px-4 py-2 hover:opacity-90"
+            >
+              + Log submission
+            </button>
+          </div>
         </header>
+
+        {importMsg && (
+          <p className="mb-4 animate-toast-in text-sm rounded-md border border-[var(--border)] bg-[var(--muted)]/10 text-[var(--ink)] px-4 py-2">
+            {importMsg}
+          </p>
+        )}
 
         <Toast message={loadError} onRetry={load} />
 

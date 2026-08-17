@@ -1,4 +1,8 @@
 const { PrismaClient } = require('@prisma/client');
+const path = require('path');
+const fs = require('fs');
+const { parseCsv, toCsv } = require('../utils/csv');
+const { UPLOAD_ROOT } = require('../middleware/upload');
 const prisma = new PrismaClient();
 
 // GET /api/submissions?status=PENDING&subject=Math
@@ -170,5 +174,182 @@ exports.deleteSubmission = async (req, res) => {
   } catch (err) {
     console.error(err);
     res.status(500).json({ error: 'Failed to delete submission' });
+  }
+};
+
+// ─────────────────────────────────────────────────────────────
+// Copy attachment (the scanned PDF / photo of the student's paper)
+// ─────────────────────────────────────────────────────────────
+
+// POST /api/submissions/:id/copy -> attach/replace the scanned copy
+exports.uploadCopy = async (req, res) => {
+  try {
+    if (!req.file) return res.status(400).json({ error: 'No file uploaded (field name: file)' });
+
+    const existing = await prisma.submission.findUnique({ where: { id: Number(req.params.id) } });
+    if (!existing) {
+      fs.unlink(req.file.path, () => {});
+      return res.status(404).json({ error: 'Submission not found' });
+    }
+
+    // Now that the new file is safely saved, remove whatever was there before.
+    if (existing.copyFilePath) {
+      fs.unlink(path.join(UPLOAD_ROOT, existing.copyFilePath), () => {});
+    }
+
+    const submission = await prisma.submission.update({
+      where: { id: existing.id },
+      data: {
+        copyFileName: req.file.originalname,
+        copyFilePath: path.basename(req.file.path),
+        copyFileType: req.file.mimetype,
+        copyUploadedAt: new Date(),
+      },
+    });
+    res.status(201).json(submission);
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: 'Failed to attach copy' });
+  }
+};
+
+// GET /api/submissions/:id/copy -> stream the attached scanned copy
+exports.downloadCopy = async (req, res) => {
+  try {
+    const submission = await prisma.submission.findUnique({ where: { id: Number(req.params.id) } });
+    if (!submission || !submission.copyFilePath) {
+      return res.status(404).json({ error: 'No copy attached to this submission' });
+    }
+    const filePath = path.join(UPLOAD_ROOT, submission.copyFilePath);
+    if (!fs.existsSync(filePath)) {
+      return res.status(404).json({ error: 'Attached file is missing on the server' });
+    }
+    res.setHeader('Content-Type', submission.copyFileType || 'application/octet-stream');
+    res.setHeader('Content-Disposition', `inline; filename="${encodeURIComponent(submission.copyFileName || 'copy')}"`);
+    fs.createReadStream(filePath).pipe(res);
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: 'Failed to fetch copy' });
+  }
+};
+
+// DELETE /api/submissions/:id/copy -> detach and delete the stored file
+exports.deleteCopy = async (req, res) => {
+  try {
+    const existing = await prisma.submission.findUnique({ where: { id: Number(req.params.id) } });
+    if (!existing) return res.status(404).json({ error: 'Submission not found' });
+    if (existing.copyFilePath) {
+      fs.unlink(path.join(UPLOAD_ROOT, existing.copyFilePath), () => {});
+    }
+    const submission = await prisma.submission.update({
+      where: { id: existing.id },
+      data: { copyFileName: null, copyFilePath: null, copyFileType: null, copyUploadedAt: null },
+    });
+    res.json(submission);
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: 'Failed to remove copy' });
+  }
+};
+
+// ─────────────────────────────────────────────────────────────
+// CSV bulk import / export
+// ─────────────────────────────────────────────────────────────
+
+// POST /api/submissions/import -> bulk-create submissions from an uploaded CSV.
+// Expected header columns (case-insensitive): studentName, studentRoll, subject,
+// assignmentTitle, maxMarks (optional, defaults to 100).
+exports.importSubmissions = async (req, res) => {
+  try {
+    if (!req.file) return res.status(400).json({ error: 'No CSV uploaded (field name: file)' });
+
+    const records = parseCsv(req.file.buffer.toString('utf-8'));
+    if (records.length === 0) {
+      return res.status(400).json({ error: 'CSV has no data rows' });
+    }
+
+    const toCreate = [];
+    const skipped = [];
+
+    records.forEach((r, idx) => {
+      const rowNum = idx + 2; // +1 for header row, +1 for 1-indexing
+      const studentName = r.studentname || r['student name'];
+      const studentRoll = r.studentroll || r['roll number'] || r.roll;
+      const subject = r.subject;
+      const assignmentTitle = r.assignmenttitle || r['assignment title'] || r.assignment;
+      const rawMax = r.maxmarks || r['max marks'];
+
+      if (!studentName || !studentRoll || !subject || !assignmentTitle) {
+        skipped.push({ row: rowNum, reason: 'Missing studentName, studentRoll, subject or assignmentTitle' });
+        return;
+      }
+
+      let maxMarks = 100;
+      if (rawMax) {
+        const parsed = Number(rawMax);
+        if (Number.isNaN(parsed) || parsed <= 0) {
+          skipped.push({ row: rowNum, reason: `Invalid maxMarks "${rawMax}"` });
+          return;
+        }
+        maxMarks = parsed;
+      }
+
+      toCreate.push({ studentName, studentRoll, subject, assignmentTitle, maxMarks });
+    });
+
+    let created = 0;
+    if (toCreate.length > 0) {
+      const result = await prisma.submission.createMany({ data: toCreate });
+      created = result.count;
+    }
+
+    res.status(201).json({ created, skippedCount: skipped.length, skipped });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: 'Failed to import CSV' });
+  }
+};
+
+// GET /api/submissions/export?status=&subject= -> CSV of the (optionally filtered) board
+exports.exportSubmissions = async (req, res) => {
+  try {
+    const { status, subject } = req.query;
+    const where = {};
+    if (status) where.status = status;
+    if (subject) where.subject = { contains: subject, mode: 'insensitive' };
+
+    const submissions = await prisma.submission.findMany({ where, orderBy: { submittedAt: 'desc' } });
+
+    const columns = [
+      { key: 'id', label: 'ID' },
+      { key: 'studentName', label: 'Student Name' },
+      { key: 'studentRoll', label: 'Roll Number' },
+      { key: 'subject', label: 'Subject' },
+      { key: 'assignmentTitle', label: 'Assignment' },
+      { key: 'status', label: 'Status' },
+      { key: 'checkerName', label: 'Checker' },
+      { key: 'marksObtained', label: 'Marks Obtained' },
+      { key: 'maxMarks', label: 'Max Marks' },
+      { key: 'remarks', label: 'Remarks' },
+      { key: 'hasCopy', label: 'Copy Attached' },
+      { key: 'submittedAt', label: 'Submitted At' },
+      { key: 'checkedAt', label: 'Checked At' },
+    ];
+
+    const rows = submissions.map((s) => ({
+      ...s,
+      hasCopy: s.copyFilePath ? 'Yes' : 'No',
+      submittedAt: s.submittedAt ? s.submittedAt.toISOString() : '',
+      checkedAt: s.checkedAt ? s.checkedAt.toISOString() : '',
+    }));
+
+    const csv = toCsv(columns, rows);
+    const filename = `submissions-${new Date().toISOString().slice(0, 10)}.csv`;
+    res.setHeader('Content-Type', 'text/csv');
+    res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
+    res.send(csv);
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: 'Failed to export CSV' });
   }
 };

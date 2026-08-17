@@ -48,6 +48,13 @@ model Submission {
   remarks          String?
   checkedAt        DateTime?
 
+  // The actual scanned copy (PDF/photo of the paper), attached separately
+  // from creation via POST /:id/copy.
+  copyFileName     String?
+  copyFilePath     String?
+  copyFileType     String?
+  copyUploadedAt   DateTime?
+
   createdAt        DateTime         @default(now())
   updatedAt        DateTime         @updatedAt
 
