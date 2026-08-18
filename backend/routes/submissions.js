@@ -16,13 +16,13 @@ const {
   exportSubmissions,
 } = require('../controllers/submissionsController');
 const { requireAuth } = require('../middleware/auth');
-const { copyUpload, csvUpload } = require('../middleware/upload');
+const { copyUpload, importUpload } = require('../middleware/upload');
 
 // Mount this router in the main app as: app.use('/api/submissions', submissionsRouter);
 
 // Fixed-path routes must come before '/:id' so "export" isn't parsed as an id.
 router.get('/export', exportSubmissions);
-router.post('/import', requireAuth, csvUpload.single('file'), importSubmissions);
+router.post('/import', requireAuth, importUpload.array('files', 20), importSubmissions);
 
 // Reads stay open so anyone signed in (or not) can view the board.
 router.get('/', getSubmissions);

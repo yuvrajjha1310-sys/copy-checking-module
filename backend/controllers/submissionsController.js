@@ -1,7 +1,7 @@
 const { PrismaClient } = require('@prisma/client');
 const path = require('path');
 const fs = require('fs');
-const { parseCsv, toCsv } = require('../utils/csv');
+const { toCsv, parseImportFile } = require('../utils/importParsing');
 const { UPLOAD_ROOT } = require('../middleware/upload');
 const prisma = new PrismaClient();
 
@@ -253,49 +253,62 @@ exports.deleteCopy = async (req, res) => {
 };
 
 // ─────────────────────────────────────────────────────────────
-// CSV bulk import / export
+// CSV / Excel bulk import, CSV export
 // ─────────────────────────────────────────────────────────────
 
-// POST /api/submissions/import -> bulk-create submissions from an uploaded CSV.
-// Expected header columns (case-insensitive): studentName, studentRoll, subject,
-// assignmentTitle, maxMarks (optional, defaults to 100).
+// POST /api/submissions/import -> bulk-create submissions from one or more
+// uploaded CSV/Excel files. Expected columns (case-insensitive): studentName,
+// studentRoll, subject, assignmentTitle, maxMarks (optional, defaults to 100).
 exports.importSubmissions = async (req, res) => {
   try {
-    if (!req.file) return res.status(400).json({ error: 'No CSV uploaded (field name: file)' });
-
-    const records = parseCsv(req.file.buffer.toString('utf-8'));
-    if (records.length === 0) {
-      return res.status(400).json({ error: 'CSV has no data rows' });
+    const files = req.files || [];
+    if (files.length === 0) {
+      return res.status(400).json({ error: 'No file(s) uploaded (field name: files)' });
     }
 
     const toCreate = [];
     const skipped = [];
 
-    records.forEach((r, idx) => {
-      const rowNum = idx + 2; // +1 for header row, +1 for 1-indexing
-      const studentName = r.studentname || r['student name'];
-      const studentRoll = r.studentroll || r['roll number'] || r.roll;
-      const subject = r.subject;
-      const assignmentTitle = r.assignmenttitle || r['assignment title'] || r.assignment;
-      const rawMax = r.maxmarks || r['max marks'];
-
-      if (!studentName || !studentRoll || !subject || !assignmentTitle) {
-        skipped.push({ row: rowNum, reason: 'Missing studentName, studentRoll, subject or assignmentTitle' });
-        return;
+    for (const file of files) {
+      let records;
+      try {
+        records = parseImportFile(file.originalname, file.mimetype, file.buffer);
+      } catch (parseErr) {
+        skipped.push({ file: file.originalname, row: '-', reason: `Could not read file: ${parseErr.message}` });
+        continue;
       }
 
-      let maxMarks = 100;
-      if (rawMax) {
-        const parsed = Number(rawMax);
-        if (Number.isNaN(parsed) || parsed <= 0) {
-          skipped.push({ row: rowNum, reason: `Invalid maxMarks "${rawMax}"` });
+      if (records.length === 0) {
+        skipped.push({ file: file.originalname, row: '-', reason: 'No data rows found' });
+        continue;
+      }
+
+      records.forEach((r, idx) => {
+        const rowNum = idx + 2; // +1 for header row, +1 for 1-indexing
+        const studentName = r.studentname || r['student name'];
+        const studentRoll = r.studentroll || r['roll number'] || r.roll;
+        const subject = r.subject;
+        const assignmentTitle = r.assignmenttitle || r['assignment title'] || r.assignment;
+        const rawMax = r.maxmarks || r['max marks'];
+
+        if (!studentName || !studentRoll || !subject || !assignmentTitle) {
+          skipped.push({ file: file.originalname, row: rowNum, reason: 'Missing studentName, studentRoll, subject or assignmentTitle' });
           return;
         }
-        maxMarks = parsed;
-      }
 
-      toCreate.push({ studentName, studentRoll, subject, assignmentTitle, maxMarks });
-    });
+        let maxMarks = 100;
+        if (rawMax) {
+          const parsed = Number(rawMax);
+          if (Number.isNaN(parsed) || parsed <= 0) {
+            skipped.push({ file: file.originalname, row: rowNum, reason: `Invalid maxMarks "${rawMax}"` });
+            return;
+          }
+          maxMarks = parsed;
+        }
+
+        toCreate.push({ studentName, studentRoll, subject, assignmentTitle, maxMarks });
+      });
+    }
 
     let created = 0;
     if (toCreate.length > 0) {
@@ -303,10 +316,10 @@ exports.importSubmissions = async (req, res) => {
       created = result.count;
     }
 
-    res.status(201).json({ created, skippedCount: skipped.length, skipped });
+    res.status(201).json({ created, skippedCount: skipped.length, skipped, filesProcessed: files.length });
   } catch (err) {
     console.error(err);
-    res.status(500).json({ error: 'Failed to import CSV' });
+    res.status(500).json({ error: 'Failed to import file(s)' });
   }
 };
 

@@ -32,17 +32,26 @@ const copyUpload = multer({
   },
 });
 
-// CSV for bulk-importing a class list of submissions. Kept in memory only —
-// we parse it and never write the raw file to disk.
-const csvUpload = multer({
+// Bulk-import a class list of submissions. CSV or Excel, one or many files at
+// once. Kept in memory only — never written to disk, just parsed and discarded.
+const ALLOWED_IMPORT_EXT = ['.csv', '.xlsx', '.xls'];
+const ALLOWED_IMPORT_MIME = [
+  'text/csv',
+  'text/plain',
+  'application/vnd.ms-excel',
+  'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+];
+
+const importUpload = multer({
   storage: multer.memoryStorage(),
-  limits: { fileSize: 5 * 1024 * 1024 }, // 5MB
+  limits: { fileSize: 5 * 1024 * 1024, files: 20 }, // 5MB per file, up to 20 files
   fileFilter: (req, file, cb) => {
-    const okType = ['text/csv', 'application/vnd.ms-excel', 'text/plain'].includes(file.mimetype);
-    const okExt = file.originalname.toLowerCase().endsWith('.csv');
-    if (okType || okExt) return cb(null, true);
-    cb(new Error('Only .csv files are allowed for import'));
+    const lower = file.originalname.toLowerCase();
+    const okExt = ALLOWED_IMPORT_EXT.some((ext) => lower.endsWith(ext));
+    const okType = ALLOWED_IMPORT_MIME.includes(file.mimetype);
+    if (okExt || okType) return cb(null, true);
+    cb(new Error('Only .csv, .xlsx or .xls files are allowed for import'));
   },
 });
 
-module.exports = { copyUpload, csvUpload, UPLOAD_ROOT };
+module.exports = { copyUpload, importUpload, UPLOAD_ROOT };
