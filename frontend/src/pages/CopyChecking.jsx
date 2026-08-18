@@ -171,18 +171,18 @@ export default function CopyChecking() {
     }
   }
 
-  // ---- CSV import / export ----
-  async function handleImport(file) {
+  // ---- Bulk import (CSV/Excel, multi-file) / CSV export ----
+  async function handleImport(files) {
     const formData = new FormData();
-    formData.append("file", file);
+    files.forEach((f) => formData.append("files", f));
     const res = await fetch(`${API_BASE}/submissions/import`, {
       method: "POST",
       credentials: "include",
       body: formData,
     });
-    const result = await unwrap(res); // throws with server message on failure
+    const result = await unwrap(res); // { created, skippedCount, skipped, filesProcessed }
     load();
-    return result; // { created, skippedCount, skipped }
+    return result;
   }
 
   async function handleExport() {
@@ -497,7 +497,7 @@ function CopyCell({ submission, apiBase, onAttach, onRemove }) {
       />
       {hasCopy ? (
         <>
-          
+          <a
             href={fileUrl}
             target="_blank"
             rel="noreferrer"
@@ -779,15 +779,16 @@ function EditModal({ submission, onClose, onSubmit }) {
   );
 }
 
-// ---------- CSV bulk import ----------
+// ---------- CSV/Excel bulk import ----------
+const IMPORT_ACCEPT = ".csv,text/csv,.xlsx,.xls,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet,application/vnd.ms-excel";
 const IMPORT_TEMPLATE = "studentName,studentRoll,subject,assignmentTitle,maxMarks\nJohn Doe,21,Mathematics,Chapter 4 Worksheet,50\n";
 
 function ImportModal({ onClose, onSubmit }) {
   const { closing, requestClose } = useClosable(onClose);
-  const [file, setFile] = useState(null);
+  const [files, setFiles] = useState([]);
   const [error, setError] = useState("");
   const [submitting, setSubmitting] = useState(false);
-  const [result, setResult] = useState(null); // { created, skippedCount, skipped }
+  const [result, setResult] = useState(null); // { created, skippedCount, skipped, filesProcessed }
 
   function downloadTemplate() {
     const blob = new Blob([IMPORT_TEMPLATE], { type: "text/csv" });
@@ -804,13 +805,13 @@ function ImportModal({ onClose, onSubmit }) {
   async function handleSubmit(e) {
     e.preventDefault();
     setError("");
-    if (!file) {
-      setError("Choose a CSV file first.");
+    if (files.length === 0) {
+      setError("Choose at least one CSV or Excel file.");
       return;
     }
     setSubmitting(true);
     try {
-      const res = await onSubmit(file);
+      const res = await onSubmit(files);
       setResult(res);
     } catch (err) {
       setError(err.message);
@@ -820,11 +821,12 @@ function ImportModal({ onClose, onSubmit }) {
   }
 
   return (
-    <ModalShell title="Import submissions from CSV" onClose={requestClose} closing={closing}>
+    <ModalShell title="Import submissions" onClose={requestClose} closing={closing}>
       {result ? (
         <div className="space-y-3">
           <p className="text-sm text-[var(--ink)]">
-            Created <span className="font-medium">{result.created}</span> submission{result.created === 1 ? "" : "s"}.
+            Processed <span className="font-medium">{result.filesProcessed}</span> file{result.filesProcessed === 1 ? "" : "s"} —
+            created <span className="font-medium">{result.created}</span> submission{result.created === 1 ? "" : "s"}.
             {result.skippedCount > 0 && (
               <> Skipped <span className="font-medium">{result.skippedCount}</span> row{result.skippedCount === 1 ? "" : "s"}.</>
             )}
@@ -832,7 +834,7 @@ function ImportModal({ onClose, onSubmit }) {
           {result.skippedCount > 0 && (
             <ul className="max-h-40 overflow-auto text-xs text-[var(--muted)] space-y-1 border border-[var(--border)] rounded-md p-2">
               {result.skipped.map((s, i) => (
-                <li key={i}>Row {s.row}: {s.reason}</li>
+                <li key={i}>{s.file} — row {s.row}: {s.reason}</li>
               ))}
             </ul>
           )}
@@ -845,17 +847,24 @@ function ImportModal({ onClose, onSubmit }) {
       ) : (
         <form onSubmit={handleSubmit} className="space-y-3">
           <p className="text-xs text-[var(--muted)]">
+            CSV or Excel (.xlsx/.xls) — select multiple to import several class lists at once.
             Columns: studentName, studentRoll, subject, assignmentTitle, maxMarks (optional, defaults to 100).{" "}
             <button type="button" onClick={downloadTemplate} className="underline">
-              Download a template
+              Download a CSV template
             </button>
           </p>
           <input
             type="file"
-            accept=".csv,text/csv"
-            onChange={(e) => setFile(e.target.files?.[0] ?? null)}
+            multiple
+            accept={IMPORT_ACCEPT}
+            onChange={(e) => setFiles(Array.from(e.target.files ?? []))}
             className="input-field focus-ring w-full rounded-md border border-[var(--border)] bg-transparent text-[var(--ink)] px-3 py-2 text-sm focus:outline-none"
           />
+          {files.length > 0 && (
+            <ul className="text-xs text-[var(--muted)] space-y-0.5">
+              {files.map((f, i) => <li key={i}>{f.name}</li>)}
+            </ul>
+          )}
 
           {error && (
             <p className="animate-toast-in text-sm text-[var(--accent)] bg-[var(--accent)]/10 border border-[var(--accent)]/30 rounded-md px-3 py-2">
