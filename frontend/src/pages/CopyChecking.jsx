@@ -51,12 +51,9 @@ export default function CopyChecking() {
   const [loading, setLoading] = useState(true);
   const [loadError, setLoadError] = useState("");
   const [showAddForm, setShowAddForm] = useState(false);
-  const [checkTarget, setCheckTarget] = useState(null); // submission being marked
+  const [checkTarget, setCheckTarget] = useState(null); // submission being marked/reviewed
   const [editTarget, setEditTarget] = useState(null); // submission being edited
-  const [importing, setImporting] = useState(false);
-  const [exporting, setExporting] = useState(false);
-  const [importMsg, setImportMsg] = useState("");
-  const fileInputRef = useRef(null);
+  const [showImport, setShowImport] = useState(false);
 
   async function load() {
     setLoading(true);
@@ -142,43 +139,53 @@ export default function CopyChecking() {
     load();
   }
 
-  function handleImportClick() {
-    setImportMsg("");
-    fileInputRef.current?.click();
-  }
-
-  async function handleImportFile(e) {
-    const file = e.target.files?.[0];
-    e.target.value = ""; // allow re-picking the same file next time
-    if (!file) return;
-
-    setImporting(true);
-    setImportMsg("");
+  // ---- Copy attachment (the scanned PDF/photo) ----
+  async function handleAttachCopy(id, file) {
+    const formData = new FormData();
+    formData.append("file", file);
     try {
-      const formData = new FormData();
-      formData.append("file", file);
-      const res = await fetch(`${API_BASE}/submissions/import`, {
+      const res = await fetch(`${API_BASE}/submissions/${id}/copy`, {
         method: "POST",
         credentials: "include",
         body: formData,
       });
-      const data = await unwrap(res);
-      setImportMsg(
-        data.skippedCount > 0
-          ? `Imported ${data.created}, skipped ${data.skippedCount} row(s).`
-          : `Imported ${data.created} submission(s).`
-      );
+      await unwrap(res);
       load();
-    } catch (err) {
-      setImportMsg(err.message);
-    } finally {
-      setImporting(false);
+      // Keep the review panel in sync if it's open on this submission.
+      setCheckTarget((prev) => (prev && prev.id === id ? { ...prev, _copyUpdated: Date.now() } : prev));
+    } catch (e) {
+      setLoadError(e.message);
     }
   }
 
+  async function handleRemoveCopy(id) {
+    try {
+      const res = await fetch(`${API_BASE}/submissions/${id}/copy`, {
+        method: "DELETE",
+        credentials: "include",
+      });
+      await unwrap(res);
+      load();
+    } catch (e) {
+      setLoadError(e.message);
+    }
+  }
+
+  // ---- CSV import / export ----
+  async function handleImport(file) {
+    const formData = new FormData();
+    formData.append("file", file);
+    const res = await fetch(`${API_BASE}/submissions/import`, {
+      method: "POST",
+      credentials: "include",
+      body: formData,
+    });
+    const result = await unwrap(res); // throws with server message on failure
+    load();
+    return result; // { created, skippedCount, skipped }
+  }
+
   async function handleExport() {
-    setExporting(true);
-    setLoadError("");
     try {
       const query = tab === "ALL" ? "" : `?status=${tab}`;
       const res = await fetch(`${API_BASE}/submissions/export${query}`, { credentials: "include" });
@@ -187,22 +194,20 @@ export default function CopyChecking() {
       const url = URL.createObjectURL(blob);
       const a = document.createElement("a");
       a.href = url;
-      a.download = `submissions-${new Date().toISOString().slice(0, 10)}.csv`;
+      a.download = `submissions-${tab.toLowerCase()}-${new Date().toISOString().slice(0, 10)}.csv`;
       document.body.appendChild(a);
       a.click();
       a.remove();
       URL.revokeObjectURL(url);
-    } catch (err) {
-      setLoadError(err.message);
-    } finally {
-      setExporting(false);
+    } catch (e) {
+      setLoadError(e.message);
     }
   }
 
   return (
     <div className="min-h-screen text-[var(--ink)]">
-      <div className="max-w-5xl mx-auto px-6 py-10">
-        <header className="mb-8 flex items-start justify-between">
+      <div className="max-w-6xl mx-auto px-6 py-10">
+        <header className="mb-8 flex items-start justify-between gap-4">
           <div>
             <p className="text-xs tracking-widest uppercase text-[var(--accent)]/70 font-semibold mb-1">
               Module — Evaluation
@@ -213,28 +218,17 @@ export default function CopyChecking() {
             </p>
           </div>
           <div className="flex items-center gap-2 shrink-0">
-            <input
-              ref={fileInputRef}
-              type="file"
-              accept=".csv,text/csv"
-              onChange={handleImportFile}
-              className="hidden"
-            />
             <button
-              onClick={handleImportClick}
-              disabled={importing}
-              className="btn focus-ring rounded-md border border-[var(--border)] text-sm font-medium px-3 py-2 text-[var(--ink)] hover:bg-[var(--muted)]/10 disabled:opacity-60 flex items-center gap-2"
+              onClick={() => setShowImport(true)}
+              className="btn focus-ring rounded-md border border-[var(--border)] text-sm font-medium px-3 py-2 text-[var(--muted)] hover:text-[var(--ink)]"
             >
-              {importing && <span className="spinner" />}
-              {importing ? "Importing…" : "Import CSV"}
+              Import CSV
             </button>
             <button
               onClick={handleExport}
-              disabled={exporting}
-              className="btn focus-ring rounded-md border border-[var(--border)] text-sm font-medium px-3 py-2 text-[var(--ink)] hover:bg-[var(--muted)]/10 disabled:opacity-60 flex items-center gap-2"
+              className="btn focus-ring rounded-md border border-[var(--border)] text-sm font-medium px-3 py-2 text-[var(--muted)] hover:text-[var(--ink)]"
             >
-              {exporting && <span className="spinner" />}
-              {exporting ? "Exporting…" : "Export CSV"}
+              Export CSV
             </button>
             <button
               onClick={() => setShowAddForm(true)}
@@ -244,12 +238,6 @@ export default function CopyChecking() {
             </button>
           </div>
         </header>
-
-        {importMsg && (
-          <p className="mb-4 animate-toast-in text-sm rounded-md border border-[var(--border)] bg-[var(--muted)]/10 text-[var(--ink)] px-4 py-2">
-            {importMsg}
-          </p>
-        )}
 
         <Toast message={loadError} onRetry={load} />
 
@@ -272,6 +260,7 @@ export default function CopyChecking() {
                   <th className="px-4 py-3">Status</th>
                   <th className="px-4 py-3">Checker</th>
                   <th className="px-4 py-3">Marks</th>
+                  <th className="px-4 py-3">Copy</th>
                   <th className="px-4 py-3 text-right">Actions</th>
                 </tr>
               </thead>
@@ -299,6 +288,14 @@ export default function CopyChecking() {
                       <td className="px-4 py-3 text-[var(--muted)]">{s.checkerName || "—"}</td>
                       <td className="px-4 py-3 font-mono text-[var(--ink)]">
                         {s.marksObtained != null ? `${s.marksObtained}/${s.maxMarks}` : "—"}
+                      </td>
+                      <td className="px-4 py-3">
+                        <CopyCell
+                          submission={s}
+                          apiBase={API_BASE}
+                          onAttach={(file) => handleAttachCopy(s.id, file)}
+                          onRemove={() => handleRemoveCopy(s.id)}
+                        />
                       </td>
                       <td className="px-4 py-3 text-right space-x-2">
                         <button
@@ -345,10 +342,18 @@ export default function CopyChecking() {
         <AddSubmissionModal onClose={() => setShowAddForm(false)} onSubmit={handleAdd} />
       )}
       {checkTarget && (
-        <CheckModal submission={checkTarget} onClose={() => setCheckTarget(null)} onSubmit={handleCheck} />
+        <ReviewModal
+          submission={checkTarget}
+          apiBase={API_BASE}
+          onClose={() => setCheckTarget(null)}
+          onSubmit={handleCheck}
+        />
       )}
       {editTarget && (
         <EditModal submission={editTarget} onClose={() => setEditTarget(null)} onSubmit={handleEdit} />
+      )}
+      {showImport && (
+        <ImportModal onClose={() => setShowImport(false)} onSubmit={handleImport} />
       )}
     </div>
   );
@@ -439,6 +444,7 @@ function SkeletonTable() {
             <th className="px-4 py-3">Status</th>
             <th className="px-4 py-3">Checker</th>
             <th className="px-4 py-3">Marks</th>
+            <th className="px-4 py-3">Copy</th>
             <th className="px-4 py-3 text-right">Actions</th>
           </tr>
         </thead>
@@ -454,11 +460,63 @@ function SkeletonTable() {
               <td className="px-4 py-3"><div className="skeleton h-5 w-20 rounded-full" /></td>
               <td className="px-4 py-3"><div className="skeleton h-3.5 w-16" /></td>
               <td className="px-4 py-3"><div className="skeleton h-3.5 w-12" /></td>
+              <td className="px-4 py-3"><div className="skeleton h-3.5 w-12" /></td>
               <td className="px-4 py-3 text-right"><div className="skeleton h-3.5 w-14 ml-auto" /></td>
             </tr>
           ))}
         </tbody>
       </table>
+    </div>
+  );
+}
+
+// ---------- Copy attach / view / replace / remove (per row) ----------
+function CopyCell({ submission, apiBase, onAttach, onRemove }) {
+  const inputRef = useRef(null);
+  const hasCopy = Boolean(submission.copyFilePath);
+  const fileUrl = `${apiBase}/submissions/${submission.id}/copy`;
+
+  function pickFile() {
+    inputRef.current?.click();
+  }
+
+  function onFileChange(e) {
+    const file = e.target.files?.[0];
+    if (file) onAttach(file);
+    e.target.value = ""; // allow re-selecting the same file later
+  }
+
+  return (
+    <div className="flex items-center gap-2">
+      <input
+        ref={inputRef}
+        type="file"
+        accept="application/pdf,image/jpeg,image/png,image/webp"
+        className="hidden"
+        onChange={onFileChange}
+      />
+      {hasCopy ? (
+        <>
+          
+            href={fileUrl}
+            target="_blank"
+            rel="noreferrer"
+            className="btn focus-ring text-xs font-medium text-[var(--accent)] hover:underline rounded px-1"
+          >
+            View
+          </a>
+          <button onClick={pickFile} className="btn focus-ring text-xs text-[var(--muted)] hover:text-[var(--ink)] hover:underline rounded px-1">
+            Replace
+          </button>
+          <button onClick={onRemove} className="btn focus-ring text-xs text-[var(--muted)] hover:text-[var(--ink)] hover:underline rounded px-1">
+            Remove
+          </button>
+        </>
+      ) : (
+        <button onClick={pickFile} className="btn focus-ring text-xs font-medium text-[var(--teal)] hover:underline rounded px-1">
+          Attach
+        </button>
+      )}
     </div>
   );
 }
@@ -527,12 +585,18 @@ function AddSubmissionModal({ onClose, onSubmit }) {
   );
 }
 
-function CheckModal({ submission, onClose, onSubmit }) {
+// ---------- Review panel: the scanned copy and the marks form, side by side ----------
+function ReviewModal({ submission, apiBase, onClose, onSubmit }) {
   const { closing, requestClose } = useClosable(onClose);
   const [marks, setMarks] = useState(submission.marksObtained ?? "");
   const [remarks, setRemarks] = useState(submission.remarks ?? "");
   const [error, setError] = useState("");
   const [submitting, setSubmitting] = useState(false);
+
+  const hasCopy = Boolean(submission.copyFilePath);
+  const fileUrl = `${apiBase}/submissions/${submission.id}/copy`;
+  const isImage = (submission.copyFileType || "").startsWith("image/");
+  const isPdf = submission.copyFileType === "application/pdf";
 
   async function handleSubmit(e) {
     e.preventDefault();
@@ -559,42 +623,87 @@ function CheckModal({ submission, onClose, onSubmit }) {
   }
 
   return (
-    <ModalShell title={`Mark — ${submission.studentName}`} onClose={requestClose} closing={closing}>
-      <form onSubmit={handleSubmit} className="space-y-3">
-        <Field
-          label={`Marks (out of ${submission.maxMarks})`}
-          type="number"
-          value={marks}
-          onChange={setMarks}
-          required
-        />
-        <div>
-          <label className="block text-xs font-medium text-[var(--muted)] mb-1">Remarks</label>
-          <textarea
-            value={remarks}
-            onChange={(e) => setRemarks(e.target.value)}
-            rows={3}
-            className="input-field focus-ring w-full rounded-md border border-[var(--border)] bg-transparent text-[var(--ink)] px-3 py-2 text-sm focus:outline-none"
-          />
+    <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
+      <div
+        className={`bg-white dark:bg-[#111111] border border-[var(--border)] rounded-lg shadow-xl w-full max-w-6xl h-[88vh] flex flex-col lg:flex-row overflow-hidden ${
+          closing ? "animate-modal-out" : "animate-modal-in"
+        }`}
+      >
+        {/* Left: the scanned copy, so marks can be entered without leaving the page */}
+        <div className="flex-1 min-h-0 min-w-0 bg-[var(--muted)]/5 border-b lg:border-b-0 lg:border-r border-[var(--border)] flex flex-col">
+          <div className="px-4 py-3 border-b border-[var(--border)] flex items-center justify-between shrink-0">
+            <div className="min-w-0">
+              <h2 className="font-display text-base text-[var(--ink)] truncate">{submission.studentName}</h2>
+              <p className="text-xs text-[var(--muted)] truncate">
+                {submission.studentRoll} · {submission.assignmentTitle}
+              </p>
+            </div>
+            <button onClick={requestClose} className="btn focus-ring shrink-0 text-[var(--muted)] hover:text-[var(--ink)] text-sm rounded px-1.5 py-0.5">
+              ✕
+            </button>
+          </div>
+          <div className="flex-1 min-h-0 overflow-auto">
+            {isPdf ? (
+              <iframe title="Scanned copy" src={fileUrl} className="w-full h-full border-0" />
+            ) : isImage ? (
+              <img src={fileUrl} alt="Scanned copy" className="w-full h-auto" />
+            ) : hasCopy ? (
+              <div className="h-full flex items-center justify-center text-sm text-[var(--muted)] p-6 text-center">
+                Can't preview this file type inline —{" "}
+                <a href={fileUrl} target="_blank" rel="noreferrer" className="underline">
+                  open it in a new tab
+                </a>
+                .
+              </div>
+            ) : (
+              <div className="h-full flex items-center justify-center text-sm text-[var(--muted)] p-6 text-center">
+                No copy attached yet. Close this and use "Attach" on the row, then reopen "Mark".
+              </div>
+            )}
+          </div>
         </div>
 
-        {error && (
-          <p className="animate-toast-in text-sm text-[var(--accent)] bg-[var(--accent)]/10 border border-[var(--accent)]/30 rounded-md px-3 py-2">
-            {error}
-          </p>
-        )}
+        {/* Right: marks entry, right next to the copy */}
+        <form onSubmit={handleSubmit} className="w-full lg:w-80 shrink-0 flex flex-col min-h-0">
+          <div className="px-4 py-3 border-b border-[var(--border)] shrink-0">
+            <h3 className="font-display text-sm text-[var(--ink)]">Enter marks</h3>
+          </div>
+          <div className="flex-1 min-h-0 overflow-auto p-4 space-y-3">
+            <Field
+              label={`Marks (out of ${submission.maxMarks})`}
+              type="number"
+              value={marks}
+              onChange={setMarks}
+              required
+            />
+            <div>
+              <label className="block text-xs font-medium text-[var(--muted)] mb-1">Remarks</label>
+              <textarea
+                value={remarks}
+                onChange={(e) => setRemarks(e.target.value)}
+                rows={8}
+                className="input-field focus-ring w-full rounded-md border border-[var(--border)] bg-transparent text-[var(--ink)] px-3 py-2 text-sm focus:outline-none"
+              />
+            </div>
 
-        <div className="flex justify-end gap-2 pt-2">
-          <button type="button" onClick={requestClose} className="btn focus-ring px-3 py-1.5 text-sm text-[var(--muted)] hover:text-[var(--ink)] rounded-md">
-            Cancel
-          </button>
-          <button type="submit" disabled={submitting} className="btn btn-primary focus-ring px-3 py-1.5 text-sm rounded-md bg-[var(--accent)] text-white hover:opacity-90 disabled:opacity-60 flex items-center gap-2">
-            {submitting && <span className="spinner" />}
-            {submitting ? "Saving…" : "Save marks"}
-          </button>
-        </div>
-      </form>
-    </ModalShell>
+            {error && (
+              <p className="animate-toast-in text-sm text-[var(--accent)] bg-[var(--accent)]/10 border border-[var(--accent)]/30 rounded-md px-3 py-2">
+                {error}
+              </p>
+            )}
+          </div>
+          <div className="p-4 border-t border-[var(--border)] flex justify-end gap-2 shrink-0">
+            <button type="button" onClick={requestClose} className="btn focus-ring px-3 py-1.5 text-sm text-[var(--muted)] hover:text-[var(--ink)] rounded-md">
+              Cancel
+            </button>
+            <button type="submit" disabled={submitting} className="btn btn-primary focus-ring px-3 py-1.5 text-sm rounded-md bg-[var(--accent)] text-white hover:opacity-90 disabled:opacity-60 flex items-center gap-2">
+              {submitting && <span className="spinner" />}
+              {submitting ? "Saving…" : "Save marks"}
+            </button>
+          </div>
+        </form>
+      </div>
+    </div>
   );
 }
 
@@ -666,6 +775,105 @@ function EditModal({ submission, onClose, onSubmit }) {
           </button>
         </div>
       </form>
+    </ModalShell>
+  );
+}
+
+// ---------- CSV bulk import ----------
+const IMPORT_TEMPLATE = "studentName,studentRoll,subject,assignmentTitle,maxMarks\nJohn Doe,21,Mathematics,Chapter 4 Worksheet,50\n";
+
+function ImportModal({ onClose, onSubmit }) {
+  const { closing, requestClose } = useClosable(onClose);
+  const [file, setFile] = useState(null);
+  const [error, setError] = useState("");
+  const [submitting, setSubmitting] = useState(false);
+  const [result, setResult] = useState(null); // { created, skippedCount, skipped }
+
+  function downloadTemplate() {
+    const blob = new Blob([IMPORT_TEMPLATE], { type: "text/csv" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = "submissions-template.csv";
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    URL.revokeObjectURL(url);
+  }
+
+  async function handleSubmit(e) {
+    e.preventDefault();
+    setError("");
+    if (!file) {
+      setError("Choose a CSV file first.");
+      return;
+    }
+    setSubmitting(true);
+    try {
+      const res = await onSubmit(file);
+      setResult(res);
+    } catch (err) {
+      setError(err.message);
+    } finally {
+      setSubmitting(false);
+    }
+  }
+
+  return (
+    <ModalShell title="Import submissions from CSV" onClose={requestClose} closing={closing}>
+      {result ? (
+        <div className="space-y-3">
+          <p className="text-sm text-[var(--ink)]">
+            Created <span className="font-medium">{result.created}</span> submission{result.created === 1 ? "" : "s"}.
+            {result.skippedCount > 0 && (
+              <> Skipped <span className="font-medium">{result.skippedCount}</span> row{result.skippedCount === 1 ? "" : "s"}.</>
+            )}
+          </p>
+          {result.skippedCount > 0 && (
+            <ul className="max-h-40 overflow-auto text-xs text-[var(--muted)] space-y-1 border border-[var(--border)] rounded-md p-2">
+              {result.skipped.map((s, i) => (
+                <li key={i}>Row {s.row}: {s.reason}</li>
+              ))}
+            </ul>
+          )}
+          <div className="flex justify-end pt-2">
+            <button onClick={requestClose} className="btn btn-primary focus-ring px-3 py-1.5 text-sm rounded-md bg-[var(--accent)] text-white hover:opacity-90">
+              Done
+            </button>
+          </div>
+        </div>
+      ) : (
+        <form onSubmit={handleSubmit} className="space-y-3">
+          <p className="text-xs text-[var(--muted)]">
+            Columns: studentName, studentRoll, subject, assignmentTitle, maxMarks (optional, defaults to 100).{" "}
+            <button type="button" onClick={downloadTemplate} className="underline">
+              Download a template
+            </button>
+          </p>
+          <input
+            type="file"
+            accept=".csv,text/csv"
+            onChange={(e) => setFile(e.target.files?.[0] ?? null)}
+            className="input-field focus-ring w-full rounded-md border border-[var(--border)] bg-transparent text-[var(--ink)] px-3 py-2 text-sm focus:outline-none"
+          />
+
+          {error && (
+            <p className="animate-toast-in text-sm text-[var(--accent)] bg-[var(--accent)]/10 border border-[var(--accent)]/30 rounded-md px-3 py-2">
+              {error}
+            </p>
+          )}
+
+          <div className="flex justify-end gap-2 pt-2">
+            <button type="button" onClick={requestClose} className="btn focus-ring px-3 py-1.5 text-sm text-[var(--muted)] hover:text-[var(--ink)] rounded-md">
+              Cancel
+            </button>
+            <button type="submit" disabled={submitting} className="btn btn-primary focus-ring px-3 py-1.5 text-sm rounded-md bg-[var(--accent)] text-white hover:opacity-90 disabled:opacity-60 flex items-center gap-2">
+              {submitting && <span className="spinner" />}
+              {submitting ? "Importing…" : "Import"}
+            </button>
+          </div>
+        </form>
+      )}
     </ModalShell>
   );
 }
